@@ -1,43 +1,55 @@
+
+
+
+
+
+
+
+
+
+
+
+
 import crypto from "crypto";
 import User from "../models/User.js";
 import sendEmail from "../config/email.js";
 
-// Send JWT in cookie
+// Send JWT response (without cookie)
 const sendTokenResponse = (user, statusCode, res) => {
   const token = user.getJwtToken();
-  const cookieExpireDays = parseInt(process.env.JWT_COOKIE_EXPIRE, 10) || 7;
-
-  const options = {
-    expires: new Date(Date.now() + cookieExpireDays * 24 * 60 * 60 * 1000),
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict"
-  };
-
-  res
-    .status(statusCode)
-    .cookie("token", token, options)
-    .json({
-      success: true,
-      token,
-      user: { 
-        id: user._id, 
-        name: user.name, 
-        email: user.email, 
-        role: user.role, 
-        username: user.username,
-        isEmailVerified: user.isEmailVerified 
-      },
-    });
+  
+  res.status(statusCode).json({
+    success: true,
+    token,
+    user: { 
+      id: user._id, 
+      name: user.name, 
+      email: user.email, 
+      role: user.role, 
+      username: user.username,
+      isEmailVerified: user.isEmailVerified 
+    },
+  });
 };
 
-// -------------------- REGISTER --------------------
+// -------------------- REGISTER (UPDATED WITH 6-DIGIT TOKEN) --------------------
 export const register = async (req, res, next) => {
   try {
     console.log("Registration request body:", req.body);
     
-    const { name, username, email, password, role } = req.body;
-
+    // Accept both name and fullName for compatibility
+    const { name, fullName, username, email, password, role } = req.body;
+    
+    // Use fullName if name is not provided (for frontend compatibility)
+    const userFullName = name || fullName;
+    
+    if (!userFullName) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Name is required" 
+      });
+    }
+    
     // Check if user exists
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
     if (existingUser) {
@@ -47,9 +59,9 @@ export const register = async (req, res, next) => {
       });
     }
 
-    // Create user
+    // Create user - use the resolved name
     const user = await User.create({ 
-      name, 
+      name: userFullName,
       username, 
       email, 
       password, 
@@ -58,36 +70,30 @@ export const register = async (req, res, next) => {
 
     console.log(`User created: ${user.email}`);
 
-    // Generate and save verification token
-    const verificationToken = user.getEmailVerificationToken();
+    // Generate 6-digit verification token
+    const verificationToken = Math.floor(100000 + Math.random() * 900000).toString();
+    user.emailVerificationToken = verificationToken;
+    user.emailVerificationExpire = Date.now() + 10 * 60 * 1000; // 10 minutes expiration
+    
     await user.save({ validateBeforeSave: false });
 
-    console.log(`Verification token generated: ${verificationToken}`);
-    console.log(`Hashed token in DB: ${user.emailVerificationToken}`);
+    console.log(`6-digit verification token generated: ${verificationToken}`);
 
-    // Create verification URL
-    const verificationUrl = `${process.env.CLIENT_URL}/verify-email/${verificationToken}`;
-    
-    console.log(`Verification URL: ${verificationUrl}`);
-
-    // Email content
+    // Email content with 6-digit token
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2 style="color: #2563eb;">Verify Your Email Address</h2>
         <p>Hello ${user.name},</p>
-        <p>Thank you for registering with JobPortal. Please verify your email address by clicking the button below:</p>
+        <p>Thank you for registering with JobPortal. Please use the following 6-digit code to verify your email address:</p>
         <div style="text-align: center; margin: 30px 0;">
-          <a href="${verificationUrl}" 
-             style="background-color: #2563eb; color: white; padding: 12px 24px; 
-                    text-decoration: none; border-radius: 5px; font-weight: bold;">
-            Verify Email
-          </a>
+          <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; display: inline-block;">
+            <h3 style="color: #2563eb; font-size: 32px; letter-spacing: 8px; margin: 0;">
+              ${verificationToken}
+            </h3>
+          </div>
         </div>
-        <p>Or copy and paste this link in your browser:</p>
-        <p style="background-color: #f3f4f6; padding: 10px; border-radius: 5px; word-break: break-all;">
-          ${verificationUrl}
-        </p>
-        <p>This link will expire in 24 hours.</p>
+        <p>Enter this code on the verification page to complete your registration.</p>
+        <p><strong>This code will expire in 10 minutes.</strong></p>
         <p>If you didn't create this account, please ignore this email.</p>
         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;">
         <p style="color: #6b7280; font-size: 12px;">
@@ -96,7 +102,7 @@ export const register = async (req, res, next) => {
       </div>
     `;
 
-    const message = `Verify your email by clicking this link: ${verificationUrl}`;
+    const message = `Your verification code is: ${verificationToken}. This code will expire in 10 minutes.`;
 
     try {
       await sendEmail({ 
@@ -108,7 +114,15 @@ export const register = async (req, res, next) => {
       
       console.log(`Verification email sent to ${user.email}`);
 
-      sendTokenResponse(user, 201, res);
+      res.status(201).json({
+        success: true,
+        message: "Registration successful! Check your email for the 6-digit verification code.",
+        data: {
+          userId: user._id,
+          email: user.email,
+          requiresVerification: true
+        }
+      });
       
     } catch (emailError) {
       console.error("Email sending failed:", emailError);
@@ -130,81 +144,55 @@ export const register = async (req, res, next) => {
   }
 };
 
-// -------------------- VERIFY EMAIL (FIXED) --------------------
+// -------------------- VERIFY EMAIL WITH 6-DIGIT TOKEN --------------------
 export const verifyEmail = async (req, res, next) => {
   try {
-    let { token } = req.params;
+    const { token, email } = req.body;
     
-    console.log(`Verification attempt - Original Token from URL: "${token}"`);
-    console.log(`Original Token length: ${token.length}`);
+    console.log(`Verification attempt - Email: ${email}, Token: ${token}`);
     
-    // Remove any leading colon or special characters (common issue with Next.js routing)
-    if (token.startsWith(':')) {
-      token = token.substring(1);
-      console.log(`Fixed token after removing colon: "${token}"`);
-      console.log(`Fixed token length: ${token.length}`);
-    }
-    
-    // Trim whitespace
-    token = token.trim();
-    
-    // Accept tokens between 40-42 characters to be more flexible
-    if (!token || token.length < 40 || token.length > 42) {
-      console.log(`Token validation failed. Length: ${token.length}, Expected: 40-42`);
+    if (!token || token.length !== 6 || !/^\d+$/.test(token)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid token format. Please use the link from your email."
+        message: "Invalid token format. Please enter a valid 6-digit code."
       });
     }
 
-    // Hash the token from URL
-    const hashedToken = crypto
-      .createHash("sha256")
-      .update(token)
-      .digest("hex");
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required for verification."
+      });
+    }
 
-    console.log(`Hashed token: ${hashedToken}`);
-
-    // Find user by hashed token
+    // Find user by email and token
     const user = await User.findOne({
-      emailVerificationToken: hashedToken,
+      email,
+      emailVerificationToken: token,
       emailVerificationExpire: { $gt: Date.now() }
     });
 
     if (!user) {
       console.log("Token verification failed - No user found or token expired");
       
-      // Debug: Show what's in the database
-      const allUsers = await User.find({ emailVerificationToken: { $exists: true } });
-      console.log("Users with verification tokens in DB:");
-      allUsers.forEach(u => {
-        console.log(`- ${u.email}: ${u.emailVerificationToken}`);
-      });
-      
       // Check if token exists but expired
-      const userWithToken = await User.findOne({
-        emailVerificationToken: hashedToken
-      });
+      const userWithToken = await User.findOne({ email, emailVerificationToken: token });
       
       if (userWithToken) {
         console.log(`Found user with token but expired: ${userWithToken.email}`);
-        console.log(`Token expires at: ${new Date(userWithToken.emailVerificationExpire).toISOString()}`);
-        console.log(`Current time: ${new Date().toISOString()}`);
-        
         return res.status(400).json({
           success: false,
-          message: "Verification token has expired. Please request a new verification email."
+          message: "Verification token has expired. Please request a new verification code."
         });
       }
       
       return res.status(400).json({
         success: false,
-        message: "Invalid verification token. Please try registering again."
+        message: "Invalid verification token. Please check your email and try again."
       });
     }
 
     console.log(`User found: ${user.email}`);
-    console.log(`User ID: ${user._id}`);
 
     // Mark email as verified
     user.isEmailVerified = true;
@@ -214,13 +202,13 @@ export const verifyEmail = async (req, res, next) => {
 
     console.log(`Email verified for: ${user.email}`);
 
-    // Generate new JWT token with updated verification status
+    // Generate JWT token
     const newToken = user.getJwtToken();
     
     res.status(200).json({
       success: true,
-      token: newToken, // Send new token with verified status
-      message: "🎉 Email verified successfully! You can now log in to your account.",
+      token: newToken,
+      message: "🎉 Email verified successfully!",
       user: {
         id: user._id,
         email: user.email,
@@ -235,7 +223,76 @@ export const verifyEmail = async (req, res, next) => {
   }
 };
 
-// -------------------- LOGIN --------------------
+// -------------------- RESEND VERIFICATION (UPDATED) --------------------
+export const resendVerification = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required"
+      });
+    }
+
+    const user = await User.findOne({ email });
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    if (user.isEmailVerified) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is already verified"
+      });
+    }
+
+    // Generate new 6-digit verification token
+    const verificationToken = Math.floor(100000 + Math.random() * 900000).toString();
+    user.emailVerificationToken = verificationToken;
+    user.emailVerificationExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
+    await user.save({ validateBeforeSave: false });
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2563eb;">New Verification Code</h2>
+        <p>Hello ${user.name},</p>
+        <p>We received a request to resend the verification code. Please use the following 6-digit code to verify your email address:</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; display: inline-block;">
+            <h3 style="color: #2563eb; font-size: 32px; letter-spacing: 8px; margin: 0;">
+              ${verificationToken}
+            </h3>
+          </div>
+        </div>
+        <p>Enter this code on the verification page to complete your registration.</p>
+        <p><strong>This code will expire in 10 minutes.</strong></p>
+      </div>
+    `;
+
+    await sendEmail({
+      email: user.email,
+      subject: "New Verification Code - JobPortal",
+      message: `Your new verification code is: ${verificationToken}`,
+      html
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "New verification code sent successfully"
+    });
+
+  } catch (error) {
+    console.error("Resend verification error:", error);
+    next(error);
+  }
+};
+
+// -------------------- LOGIN (UPDATED - NO COOKIE) --------------------
 export const login = async (req, res, next) => {
   try {
     console.log("Login attempt for:", req.body.email);
@@ -276,13 +333,26 @@ export const login = async (req, res, next) => {
       console.log("Email not verified for:", email);
       return res.status(403).json({
         success: false,
-        message: "Please verify your email before logging in. Check your inbox for the verification email.",
+        message: "Please verify your email before logging in. Check your inbox for the verification code.",
         requiresVerification: true
       });
     }
 
     console.log("Login successful for:", email);
-    sendTokenResponse(user, 200, res);
+    
+    const token = user.getJwtToken();
+    res.status(200).json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        username: user.username,
+        isEmailVerified: user.isEmailVerified
+      }
+    });
 
   } catch (error) {
     console.error("Login error:", error);
@@ -290,73 +360,6 @@ export const login = async (req, res, next) => {
   }
 };
 
-// -------------------- RESEND VERIFICATION --------------------
-export const resendVerification = async (req, res, next) => {
-  try {
-    const { email } = req.body;
-    
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: "Email is required"
-      });
-    }
-
-    const user = await User.findOne({ email });
-    
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found"
-      });
-    }
-
-    if (user.isEmailVerified) {
-      return res.status(400).json({
-        success: false,
-        message: "Email is already verified"
-      });
-    }
-
-    // Generate new verification token
-    const verificationToken = user.getEmailVerificationToken();
-    await user.save({ validateBeforeSave: false });
-
-    const verificationUrl = `${process.env.CLIENT_URL}/verify-email/${verificationToken}`;
-    
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #2563eb;">Verify Your Email Address</h2>
-        <p>Hello ${user.name},</p>
-        <p>We received a request to resend the verification email. Please verify your email address by clicking the button below:</p>
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${verificationUrl}" 
-             style="background-color: #2563eb; color: white; padding: 12px 24px; 
-                    text-decoration: none; border-radius: 5px; font-weight: bold;">
-            Verify Email
-          </a>
-        </div>
-        <p>This link will expire in 24 hours.</p>
-      </div>
-    `;
-
-    await sendEmail({
-      email: user.email,
-      subject: "Resend: Verify Your Email - JobPortal",
-      message: `Verify your email: ${verificationUrl}`,
-      html
-    });
-
-    res.status(200).json({
-      success: true,
-      message: "Verification email resent successfully"
-    });
-
-  } catch (error) {
-    console.error("Resend verification error:", error);
-    next(error);
-  }
-};
 
 // -------------------- FORGOT PASSWORD --------------------
 export const forgotPassword = async (req, res, next) => {
@@ -510,10 +513,9 @@ export const getMe = async (req, res, next) => {
   }
 };
 
-// -------------------- LOGOUT --------------------
+// -------------------- LOGOUT (SIMPLIFIED) --------------------
 export const logout = async (req, res, next) => {
   try {
-    res.clearCookie("token");
     res.status(200).json({
       success: true,
       message: "Logged out successfully"
@@ -523,3 +525,6 @@ export const logout = async (req, res, next) => {
     next(error);
   }
 };
+
+// ... Keep the rest of the functions (getMe, forgotPassword, resetPassword) the same, 
+// just remove any cookie references if they exist
