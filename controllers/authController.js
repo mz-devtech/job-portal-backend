@@ -32,117 +32,56 @@ const sendTokenResponse = (user, statusCode, res) => {
   });
 };
 
-// -------------------- REGISTER (UPDATED WITH 6-DIGIT TOKEN) --------------------
+// REGISTER
 export const register = async (req, res, next) => {
   try {
-    console.log("Registration request body:", req.body);
-    
-    // Accept both name and fullName for compatibility
     const { name, fullName, username, email, password, role } = req.body;
-    
-    // Use fullName if name is not provided (for frontend compatibility)
-    const userFullName = name || fullName;
-    
-    if (!userFullName) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Name is required" 
-      });
-    }
-    
-    // Check if user exists
-    const existingUser = await User.findOne({ $or: [{ email }, { username }] });
-    if (existingUser) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "User already exists with this email or username" 
-      });
+
+    const userName = name || fullName;
+    if (!userName || !email || !password) {
+      return res.status(400).json({ success: false, message: "تمام فیلڈز لازمی ہیں" });
     }
 
-    // Create user - use the resolved name
-    const user = await User.create({ 
-      name: userFullName,
-      username, 
-      email, 
-      password, 
-      role: role || "candidate" 
+    const safeUsername =
+      username || email.split("@")[0] + Math.floor(Math.random() * 1000);
+
+    const exists = await User.findOne({ $or: [{ email }, { username: safeUsername }] });
+    if (exists) {
+      return res.status(400).json({ success: false, message: "User already exists" });
+    }
+
+    const user = await User.create({
+      name: userName,
+      username: safeUsername,
+      email,
+      password,
+      role: role || "candidate",
     });
 
-    console.log(`User created: ${user.email}`);
-
-    // Generate 6-digit verification token
-    const verificationToken = Math.floor(100000 + Math.random() * 900000).toString();
-    user.emailVerificationToken = verificationToken;
-    user.emailVerificationExpire = Date.now() + 10 * 60 * 1000; // 10 minutes expiration
-    
+    // 6 digit code
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    user.emailVerificationToken = code;
+    user.emailVerificationExpire = Date.now() + 10 * 60 * 1000;
     await user.save({ validateBeforeSave: false });
 
-    console.log(`6-digit verification token generated: ${verificationToken}`);
+    // ❗ اگر email issue ہو تو temporarily comment کر سکتے ہیں
+    await sendEmail({
+      email: user.email,
+      subject: "Verify Email",
+      message: `Your verification code is ${code}`,
+    });
 
-    // Email content with 6-digit token
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #2563eb;">Verify Your Email Address</h2>
-        <p>Hello ${user.name},</p>
-        <p>Thank you for registering with JobPortal. Please use the following 6-digit code to verify your email address:</p>
-        <div style="text-align: center; margin: 30px 0;">
-          <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; display: inline-block;">
-            <h3 style="color: #2563eb; font-size: 32px; letter-spacing: 8px; margin: 0;">
-              ${verificationToken}
-            </h3>
-          </div>
-        </div>
-        <p>Enter this code on the verification page to complete your registration.</p>
-        <p><strong>This code will expire in 10 minutes.</strong></p>
-        <p>If you didn't create this account, please ignore this email.</p>
-        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;">
-        <p style="color: #6b7280; font-size: 12px;">
-          © ${new Date().getFullYear()} JobPortal. All rights reserved.
-        </p>
-      </div>
-    `;
-
-    const message = `Your verification code is: ${verificationToken}. This code will expire in 10 minutes.`;
-
-    try {
-      await sendEmail({ 
-        email: user.email, 
-        subject: "Verify Your Email - JobPortal", 
-        message, 
-        html 
-      });
-      
-      console.log(`Verification email sent to ${user.email}`);
-
-      res.status(201).json({
-        success: true,
-        message: "Registration successful! Check your email for the 6-digit verification code.",
-        data: {
-          userId: user._id,
-          email: user.email,
-          requiresVerification: true
-        }
-      });
-      
-    } catch (emailError) {
-      console.error("Email sending failed:", emailError);
-      
-      // Clean up verification tokens on email failure
-      user.emailVerificationToken = undefined;
-      user.emailVerificationExpire = undefined;
-      await user.save({ validateBeforeSave: false });
-
-      return res.status(500).json({
-        success: false,
-        message: "Verification email could not be sent. Please try again later.",
-      });
-    }
+    res.status(201).json({
+      success: true,
+      message: "Registration successful, email verify کریں",
+      data: { userId: user._id, email: user.email },
+    });
 
   } catch (error) {
-    console.error("Registration error:", error);
     next(error);
   }
 };
+
 
 // -------------------- VERIFY EMAIL WITH 6-DIGIT TOKEN --------------------
 export const verifyEmail = async (req, res, next) => {
@@ -292,70 +231,25 @@ export const resendVerification = async (req, res, next) => {
   }
 };
 
-// -------------------- LOGIN (UPDATED - NO COOKIE) --------------------
+// LOGIN
 export const login = async (req, res, next) => {
   try {
-    console.log("Login attempt for:", req.body.email);
-    
     const { email, password } = req.body;
-    
-    if (!email || !password) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Please provide both email and password" 
-      });
-    }
 
-    // Find user with password field
     const user = await User.findOne({ email }).select("+password");
-    
-    if (!user) {
-      console.log("No user found with email:", email);
-      return res.status(401).json({ 
-        success: false, 
-        message: "Invalid email or password" 
-      });
-    }
+    if (!user) return res.status(401).json({ success: false, message: "Invalid credentials" });
 
-    // Check password
-    const isMatch = await user.comparePassword(password);
-    
-    if (!isMatch) {
-      console.log("Password mismatch for:", email);
-      return res.status(401).json({ 
-        success: false, 
-        message: "Invalid email or password" 
-      });
-    }
+    const match = await user.comparePassword(password);
+    if (!match) return res.status(401).json({ success: false, message: "Invalid credentials" });
 
-    // Check if email is verified
     if (!user.isEmailVerified) {
-      console.log("Email not verified for:", email);
-      return res.status(403).json({
-        success: false,
-        message: "Please verify your email before logging in. Check your inbox for the verification code.",
-        requiresVerification: true
-      });
+      return res.status(403).json({ success: false, message: "Email verify کریں" });
     }
 
-    console.log("Login successful for:", email);
-    
     const token = user.getJwtToken();
-    res.status(200).json({
-      success: true,
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        username: user.username,
-        isEmailVerified: user.isEmailVerified
-      }
-    });
+    res.status(200).json({ success: true, token, user });
 
   } catch (error) {
-    console.error("Login error:", error);
     next(error);
   }
 };
