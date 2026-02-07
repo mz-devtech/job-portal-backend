@@ -1,199 +1,233 @@
-import express from 'express';
-import dotenv from 'dotenv';
-import cors from 'cors';
-import helmet from 'helmet';
-import mongoSanitize from 'express-mongo-sanitize';
-import xss from 'xss-clean';
-import rateLimit from 'express-rate-limit';
-import cookieParser from 'cookie-parser';
+import express from "express";
+import dotenv from "dotenv";
+import cors from "cors";
+import helmet from "helmet";
+import mongoSanitize from "express-mongo-sanitize";
+import xss from "xss-clean";
+import rateLimit from "express-rate-limit";
+import cookieParser from "cookie-parser";
 
-// ========================
-// Load environment variables FIRST
-// ========================
-console.log('🔍 [DEBUG] Loading environment variables...');
-dotenv.config({ path: '.env' });
+import session from 'express-session';
+import passport from './config/googleOAuth.js';
 
-// Debug critical env vars
-console.log('✅ Environment variables loaded:');
-console.log('- NODE_ENV:', process.env.NODE_ENV);
-console.log('- PORT:', process.env.PORT);
-console.log('- MONGODB_URI:', process.env.MONGODB_URI ? 'SET' : 'MISSING');
-console.log('- JWT_SECRET:', process.env.JWT_SECRET ? 'SET' : 'MISSING');
+// Load environment variables
+dotenv.config({ path: ".env" });
 
-// ========================
-// Import other modules AFTER env vars
-// ========================
-import connectDB from './config/db.js';
-import authRoutes from './routes/auth.js';
+// Database connection
+import connectDB from "./config/db.js";
+// Import routes
+import routes from "./routes/index.js";
 
-// Connect to DB
-console.log('\n🔍 Connecting to database...');
-connectDB().catch(err => {
-  console.error('❌ MongoDB connection failed:', err.message);
+// Connect to MongoDB
+connectDB().catch((err) => {
+  console.error("❌ MongoDB connection failed:", err.message);
   process.exit(1);
 });
 
 const app = express();
 
-// ✅ CORS Configuration - SIMPLIFIED
-const corsOptions = {
-  origin: [
-    'https://job-portal-frontend-lovat-alpha.vercel.app',
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'https://job-portal-backend-three-gamma.vercel.app'
-  ],
-  credentials: true,
-  optionsSuccessStatus: 200
-};
 
-app.use(cors(corsOptions));
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your_session_secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
+}));
+
+// Initialize Passport
+app.use(passport.initialize());
+app.use(passport.session());
+
+
+
+// ========== MIDDLEWARE SETUP ==========
+
+// CORS Configuration
+app.use(
+  cors({
+    origin: [
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "https://job-portal-frontend-lovat-alpha.vercel.app",
+    ],
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  })
+);
 
 // Handle preflight requests
-app.options('*', cors(corsOptions));
+app.options("*", cors());
 
-// Request logging middleware
+// ========== SIMPLE REQUEST LOGGING ==========
 app.use((req, res, next) => {
-  console.log(`\n📨 [${new Date().toISOString()}] ${req.method} ${req.url}`);
+  console.log(
+    `\n📨 [${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
+  );
+  console.log("📋 Content-Type:", req.headers["content-type"]);
   next();
 });
 
-// Body parser
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// ========== CRITICAL: DO NOT USE CUSTOM BODY PARSER ==========
+// ========== USE EXPRESS BUILT-IN PARSERS ONLY ==========
+
+// 1. For JSON requests
+app.use(express.json({ 
+  limit: '50mb',
+  type: ['application/json', 'text/plain'] // Handle both
+}));
+
+// 2. For URL-encoded requests
+app.use(express.urlencoded({ 
+  extended: true, 
+  limit: '50mb',
+  type: ['application/x-www-form-urlencoded']
+}));
+
+// IMPORTANT: Multer should NOT be used globally
+// Multer should only be used in specific routes that need file uploads
+
+// Cookie parser
 app.use(cookieParser());
 
-// Security middleware
+// ========== SECURITY MIDDLEWARE ==========
 app.use(helmet());
 app.use(mongoSanitize());
 app.use(xss());
 
-// Rate limiting
+// ========== RATE LIMITING ==========
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
-  message: 'Too many requests from this IP, please try again later',
+  max: 1000, // Increased for testing
+  message: { success: false, message: "Too many requests" },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
-app.use('/api/', limiter);
+app.use("/api/", limiter);
 
-// ========================
-// ROUTES
-// ========================
+// ========== TEST ENDPOINTS ==========
+app.post("/test-body", (req, res) => {
+  console.log("\n🔍 TEST ENDPOINT CALLED");
+  console.log("📋 Content-Type:", req.headers["content-type"]);
+  console.log("📦 Body:", req.body);
+  console.log("📦 Body keys:", Object.keys(req.body || {}));
 
-// Health check - MUST BE FIRST
-app.get('/', (req, res) => {
-  res.json({
-    status: 'ok',
-    message: 'Job Portal Backend API',
-    version: '1.0.0',
-    timestamp: new Date().toISOString(),
-    endpoints: {
-      auth: '/api/auth',
-      health: '/health',
-      test: '/api/test',
-      testDb: '/api/test-db'
-    }
-  });
-});
-
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    service: 'job-portal-backend',
-    environment: process.env.NODE_ENV,
-    database: 'connected'
-  });
-});
-
-// Test endpoints
-app.get('/api/test', (req, res) => {
   res.json({
     success: true,
-    message: 'API is working!',
-    timestamp: new Date().toISOString()
+    message: "Body received successfully",
+    body: req.body,
+    contentType: req.headers["content-type"]
   });
 });
 
-app.get('/api/test-db', async (req, res) => {
-  try {
-    const User = (await import('./models/User.js')).default;
-    const userCount = await User.countDocuments();
-    res.json({
-      success: true,
-      message: 'Database connection successful',
-      userCount,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Database connection failed',
-      error: error.message
-    });
-  }
+// ========== HEALTH CHECK ==========
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "Job Portal API",
+    version: "1.0.0",
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      auth: "/api/auth",
+      candidate: "/api/candidate",
+      employer: "/api/employer",
+      user: "/api/user",
+      jobs: "/api/jobs",
+      applications: "/api/applications",
+    },
+    testEndpoint: "POST /test-body"
+  });
 });
 
-// Test email endpoint
-app.get('/api/test-email', async (req, res) => {
-  try {
-    const { default: sendEmail } = await import('./config/email.js');
-    
-    const result = await sendEmail({
-      email: 'test@example.com',
-      subject: 'Test Email',
-      message: 'This is a test email from Job Portal Backend'
-    });
-    
-    res.json({
-      success: true,
-      message: 'Email test completed',
-      result: result
-    });
-  } catch (error) {
-    console.error('Email test error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Email test failed',
-      error: error.message
-    });
-  }
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    service: "job-portal-api",
+    database: "connected",
+    uptime: process.uptime()
+  });
 });
 
-// API Routes
-app.use('/api/auth', authRoutes);
+// ========== API ROUTES ==========
+app.use("/api", routes);
 
+// ========== ERROR HANDLING ==========
 // 404 handler
-app.use('*', (req, res) => {
+app.use("*", (req, res) => {
+  console.log(`❌ 404: Route ${req.originalUrl} not found`);
   res.status(404).json({
     success: false,
-    message: `Route ${req.originalUrl} not found`
+    message: `Route ${req.originalUrl} not found`,
+    method: req.method,
+    url: req.originalUrl,
+    availableEndpoints: {
+      auth: "/api/auth",
+      candidate: "/api/candidate",
+      employer: "/api/employer",
+      user: "/api/user",
+      jobs: "/api/jobs",
+      applications: "/api/applications",
+    },
   });
 });
 
-// ========================
-// ERROR HANDLER - SIMPLIFIED
-// ========================
+// Global error handler
 app.use((err, req, res, next) => {
-  console.error('\n❌ ERROR:', err.message);
-  console.error('Stack:', err.stack);
+  console.error("❌ Server Error:", err.message);
   
+  // Handle JSON parsing errors
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid JSON format in request body",
+      error: process.env.NODE_ENV === "development" ? err.message : undefined
+    });
+  }
+
   res.status(err.status || 500).json({
     success: false,
-    error: err.message || 'Internal server error',
-    timestamp: new Date().toISOString()
+    message: "Internal server error",
+    error: process.env.NODE_ENV === "development" ? err.message : undefined,
   });
 });
 
+// ========== START SERVER ==========
 const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, () => {
-  console.log(`\n✅ ===== SERVER STARTED =====`);
-  console.log(`✅ Server running on port ${PORT}`);
-  console.log(`✅ Environment: ${process.env.NODE_ENV}`);
-  console.log(`✅ Base URL: http://localhost:${PORT}`);
+  console.log(`\n✅ Server running on port ${PORT}`);
+  console.log(`✅ Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(`\n🔗 Test endpoints:`);
+  console.log(`├── GET  http://localhost:${PORT}/`);
+  console.log(`├── GET  http://localhost:${PORT}/health`);
+  console.log(`├── POST http://localhost:${PORT}/test-body`);
+  console.log(`\n📁 API Endpoints:`);
+  console.log(`├── Auth: /api/auth`);
+  console.log(`├── Candidate: /api/candidate`);
+  console.log(`├── Employer: /api/employer`);
+  console.log(`├── User: /api/user`);
+  console.log(`├── Jobs: /api/jobs`);
+  console.log(`└── Applications: /api/applications`);
 });
 
-process.on('unhandledRejection', (err) => {
-  console.error('❌ Unhandled Rejection:', err.message);
-  server.close(() => process.exit(1));
+// Graceful shutdown
+process.on("SIGTERM", () => {
+  console.log("SIGTERM received. Shutting down gracefully...");
+  server.close(() => {
+    console.log("Process terminated");
+    process.exit(0);
+  });
 });
+
+process.on("SIGINT", () => {
+  console.log("SIGINT received. Shutting down gracefully...");
+  server.close(() => {
+    console.log("Process terminated");
+    process.exit(0);
+  });
+});
+
+export default app;
