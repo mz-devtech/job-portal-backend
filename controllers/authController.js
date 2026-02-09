@@ -621,11 +621,79 @@ export const forgotPassword = async (req, res) => {
     const resetUrl = `${process.env.CLIENT_URL || "http://localhost:3000"}/reset-password/${resetToken}`;
     console.log(`🔗 [FORGOT PASSWORD] Reset URL: ${resetUrl}`);
 
-    // Send email
+    // HTML email template with button
+    const htmlMessage = `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        .button {
+            display: inline-block;
+            padding: 12px 24px;
+            background-color: #4CAF50;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            font-weight: bold;
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .expiry-note {
+            color: #666;
+            font-size: 14px;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+        .link-box {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            word-break: break-all;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Password Reset Request</h2>
+        <p>Hello ${user.name},</p>
+        <p>You requested to reset your password for the Job Portal account.</p>
+        <p>Click the button below to reset your password:</p>
+        <p style="text-align: center; margin: 25px 0;">
+            <a href="${resetUrl}" class="button">Reset Password</a>
+        </p>
+        <p>Or copy and paste this link in your browser:</p>
+        <div class="link-box">
+            ${resetUrl}
+        </div>
+        <div class="expiry-note">
+            <p><strong>Note:</strong> This link will expire in 30 minutes.</p>
+            <p>If you didn't request a password reset, please ignore this email.</p>
+        </div>
+    </div>
+</body>
+</html>
+`;
+
+    // Plain text fallback
+    const plainMessage = `You requested a password reset for your Job Portal account.\n\nClick the link below to reset your password:\n\n${resetUrl}\n\nThis link will expire in 30 minutes.\n\nIf you didn't request this, please ignore this email.`;
+
+    // Send email with HTML content
     await sendEmail({
       email: user.email,
       subject: "Password Reset Request - Job Portal",
-      message: `You requested a password reset. Click the link below to reset your password:\n\n${resetUrl}\n\nThis link will expire in 30 minutes.\n\nIf you didn't request this, please ignore this email.`,
+      message: htmlMessage, // HTML content
+      text: plainMessage, // Plain text fallback
     });
 
     console.log(`✅ [FORGOT PASSWORD] Reset email sent to ${user.email}`);
@@ -677,8 +745,7 @@ export const resetPassword = async (req, res) => {
         console.error("❌ Error parsing body:", e);
         return res.status(400).json({
           success: false,
-          message:
-            "Invalid JSON format. Please use Content-Type: application/json",
+          message: "Invalid JSON format. Please use Content-Type: application/json",
         });
       }
     } else {
@@ -699,6 +766,7 @@ export const resetPassword = async (req, res) => {
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
     console.log(`🔍 [RESET PASSWORD] Searching for user with hashed token...`);
+    console.log(`🔑 Hashed token: ${hashedToken}`);
 
     const user = await User.findOne({
       resetPasswordToken: hashedToken,
@@ -707,6 +775,17 @@ export const resetPassword = async (req, res) => {
 
     if (!user) {
       console.error(`❌ [RESET PASSWORD] Invalid or expired token`);
+      
+      // DEBUG: Check for expired token
+      const expiredUser = await User.findOne({ resetPasswordToken: hashedToken });
+      if (expiredUser) {
+        console.error(`⏰ [RESET PASSWORD] Token expired at: ${new Date(expiredUser.resetPasswordExpire).toISOString()}`);
+        // Clean up expired token
+        expiredUser.resetPasswordToken = undefined;
+        expiredUser.resetPasswordExpire = undefined;
+        await expiredUser.save();
+      }
+      
       return res.status(400).json({
         success: false,
         message: "Invalid or expired reset token",
@@ -714,6 +793,7 @@ export const resetPassword = async (req, res) => {
     }
 
     console.log(`✅ [RESET PASSWORD] User found: ${user.name}, Role: ${user.role}`);
+    console.log(`⏰ [RESET PASSWORD] Token expires at: ${new Date(user.resetPasswordExpire).toISOString()}`);
 
     // Set new password
     user.password = password;
@@ -723,20 +803,34 @@ export const resetPassword = async (req, res) => {
 
     console.log(`✅ [RESET PASSWORD] Password reset successful for ${user.email}`);
 
-    // Send confirmation email
-    await sendEmail({
-      email: user.email,
-      subject: "Password Reset Successful - Job Portal",
-      message:
-        "Your password has been successfully reset. You can now login with your new password.",
-    });
+    // Send confirmation email - ONLY after successful reset
+    try {
+      await sendEmail({
+        email: user.email,
+        subject: "Password Reset Successful - Job Portal",
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2>Password Reset Successful</h2>
+            <p>Hello ${user.name},</p>
+            <p>Your password has been successfully reset for your Job Portal account.</p>
+            <p>You can now login with your new password.</p>
+            <p>If you did not request this password reset, please contact support immediately.</p>
+          </div>
+        `,
+        text: `Your password has been successfully reset. You can now login with your new password.`,
+      });
+      console.log(`✅ [RESET PASSWORD] Confirmation email sent to ${user.email}`);
+    } catch (emailError) {
+      console.error(`❌ [RESET PASSWORD] Failed to send confirmation email:`, emailError);
+      // Don't fail the reset if email fails
+    }
 
-    console.log(`✅ [RESET PASSWORD] Confirmation email sent`);
-
+    // Return SUCCESS response
     res.status(200).json({
       success: true,
       message: "Password reset successful",
     });
+
   } catch (error) {
     console.error("❌ [RESET PASSWORD] Error:", error);
     res.status(500).json({
