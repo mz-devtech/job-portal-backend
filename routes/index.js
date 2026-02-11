@@ -1,14 +1,20 @@
 import express from "express";
 import authRoutes from "./auth.js";
-import profileRoutes from "./profileRoutes.js"; // Add this line
-import candidateProfileRoutes from "./candidateProfileRoutes.js"; // Add this
-
+import profileRoutes from "./profileRoutes.js";
+import candidateProfileRoutes from "./candidateProfileRoutes.js";
+import jobRoutes from "./jobRoutes.js";
+import savedJobRoutes from './savedJobRoutes.js';
+import searchHistoryRoutes from './searchHistoryRoutes.js';
+import applicationRoutes from './applicationRoutes.js'; // Add this line
 
 const router = express.Router();
 
 router.use("/auth", authRoutes);
-router.use("/profile", profileRoutes); // Add this line
-router.use("/candidate-profile", candidateProfileRoutes); // Add this
-
+router.use("/profile", profileRoutes);
+router.use("/candidate-profile", candidateProfileRoutes);
+router.use("/jobs", jobRoutes);
+router.use("/saved-jobs", savedJobRoutes);
+router.use("/search-history", searchHistoryRoutes);
+router.use("/applications", applicationRoutes); // Add this line
 
 export default router;
