@@ -1,8 +1,13 @@
 import crypto from "crypto";
 import User from "../models/User.js";
+import Profile from '../models/Profile.js'
 import sendEmail from "../config/email.js";
 import passport from '../config/googleOAuth.js';
 import dotenv from "dotenv";
+
+// ADD THIS IMPORT:
+import { uploadToCloudinary } from "../utils/cloudinary.js"; // Or wherever your cloudinary file is
+
 dotenv.config();
 
 export const register = async (req, res) => {
@@ -283,17 +288,21 @@ export const register = async (req, res) => {
   }
 };
 
-// VERIFY EMAIL (Updated to accept "code" instead of "token")
+// VERIFY EMAIL (Fixed to handle both 'code' and 'token')
 export const verifyEmail = async (req, res) => {
   try {
     console.log("\n" + "=".repeat(60));
     console.log("📧 [VERIFY EMAIL] Email verification request");
     console.log("=".repeat(60));
-    const { code, email } = req.body;
+    const { code, token, email } = req.body;
+    
+    // Accept both 'code' and 'token' for backward compatibility
+    const verificationCode = code || token;
+    
     console.log(`📧 Email: ${email}`);
-    console.log(`🔢 Code: ${code}`);
+    console.log(`🔢 Code: ${verificationCode}`);
 
-    if (!code || !email) {
+    if (!verificationCode || !email) {
       console.error(`❌ [VERIFY EMAIL] Missing code or email`);
       return res.status(400).json({
         success: false,
@@ -304,7 +313,7 @@ export const verifyEmail = async (req, res) => {
     console.log(`🔍 [VERIFY EMAIL] Searching for user...`);
     const user = await User.findOne({
       email: email.toLowerCase(),
-      emailVerificationToken: code,
+      emailVerificationToken: verificationCode,
       emailVerificationExpire: { $gt: Date.now() },
     });
 
@@ -327,21 +336,37 @@ export const verifyEmail = async (req, res) => {
 
     console.log(`✅ [VERIFY EMAIL] Email verified for ${user.email}`);
 
+    // Get user profile if exists
+    const profile = await Profile.findOne({ user: user._id });
+    
+    if (profile) {
+      console.log(`✅ [VERIFY EMAIL] Profile found`);
+    }
+
     const jwtToken = user.getJwtToken();
+
+    // Prepare user response with profile data
+    const userResponse = {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      username: user.username,
+      role: user.role,
+      isEmailVerified: true,
+      isProfileComplete: user.isProfileComplete,
+      profile: profile ? {
+        _id: profile._id,
+        isProfileComplete: profile.isProfileComplete,
+        completionPercentage: profile.completionPercentage,
+        role: profile.role
+      } : null
+    };
 
     res.status(200).json({
       success: true,
       message: "Email verified successfully!",
       token: jwtToken,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        username: user.username,
-        role: user.role,
-        isEmailVerified: true,
-        isProfileComplete: false,
-      },
+      user: userResponse,
     });
   } catch (error) {
     console.error("❌ [VERIFY EMAIL] Verification error:", error);
@@ -352,7 +377,7 @@ export const verifyEmail = async (req, res) => {
   }
 };
 
-// LOGIN with logs
+// LOGIN with profile data
 export const login = async (req, res) => {
   try {
     console.log("\n" + "=".repeat(60));
@@ -412,8 +437,49 @@ export const login = async (req, res) => {
     }
 
     console.log(`✅ [LOGIN] Email is verified`);
+
+    // Get user profile if exists
+    console.log(`📋 [LOGIN] Fetching user profile...`);
+    const profile = await Profile.findOne({ user: user._id });
+    
+    if (profile) {
+      console.log(`✅ [LOGIN] Profile found for user`);
+      console.log(`   - Profile complete: ${profile.isProfileComplete}`);
+      console.log(`   - Completion percentage: ${profile.completionPercentage}%`);
+    } else {
+      console.log(`ℹ️ [LOGIN] No profile found for user`);
+    }
+
     const token = user.getJwtToken();
     console.log(`🔑 [LOGIN] JWT token generated`);
+
+    // Prepare user response with profile data
+    const userResponse = {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      username: user.username,
+      role: user.role,
+      isEmailVerified: user.isEmailVerified,
+      isProfileComplete: user.isProfileComplete,
+      profile: profile ? {
+        _id: profile._id,
+        isProfileComplete: profile.isProfileComplete,
+        completionPercentage: profile.completionPercentage,
+        role: profile.role,
+        companyInfo: profile.companyInfo || null,
+        foundingInfo: profile.foundingInfo || null,
+        personalInfo: profile.personalInfo || null,
+        profileDetails: profile.profileDetails || null,
+        socialLinks: profile.socialLinks || [],
+        phone: profile.phone || "",
+        location: profile.location || "",
+        profileImage: profile.profileImage || "",
+        accountSettings: profile.accountSettings || null,
+        lastUpdated: profile.lastUpdated,
+        createdAt: profile.createdAt
+      } : null
+    };
 
     console.log("\n" + "=".repeat(60));
     console.log("🎉 [LOGIN] LOGIN SUCCESSFUL");
@@ -421,20 +487,15 @@ export const login = async (req, res) => {
     console.log(`👤 User: ${user.name}`);
     console.log(`🎭 Role: ${user.role}`);
     console.log(`📧 Email: ${user.email}`);
+    console.log(`✅ Profile exists: ${!!profile}`);
+    console.log(`✅ Profile complete: ${profile?.isProfileComplete || false}`);
+    console.log(`📊 Completion %: ${profile?.completionPercentage || 0}%`);
     console.log("=".repeat(60) + "\n");
 
     res.json({
       success: true,
       token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        username: user.username,
-        role: user.role,
-        isEmailVerified: user.isEmailVerified,
-        isProfileComplete: user.isProfileComplete,
-      },
+      user: userResponse,
     });
   } catch (error) {
     console.error("❌ [LOGIN] Login error:", error);
@@ -515,7 +576,7 @@ export const resendVerification = async (req, res) => {
   }
 };
 
-// GET CURRENT USER
+// GET CURRENT USER with profile
 export const getMe = async (req, res) => {
   try {
     console.log(`👤 [GET ME] Request from user: ${req.user.id}`);
@@ -529,20 +590,45 @@ export const getMe = async (req, res) => {
       });
     }
 
-    console.log(`✅ [GET ME] User found: ${user.name}, Role: ${user.role}`);
+    // Get user profile
+    const profile = await Profile.findOne({ user: user._id });
+    
+    if (profile) {
+      console.log(`✅ [GET ME] Profile found for user`);
+    }
+
+    const userResponse = {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      username: user.username,
+      role: user.role,
+      isEmailVerified: user.isEmailVerified,
+      isProfileComplete: user.isProfileComplete,
+      profile: profile ? {
+        _id: profile._id,
+        isProfileComplete: profile.isProfileComplete,
+        completionPercentage: profile.completionPercentage,
+        role: profile.role,
+        companyInfo: profile.companyInfo || null,
+        foundingInfo: profile.foundingInfo || null,
+        personalInfo: profile.personalInfo || null,
+        profileDetails: profile.profileDetails || null,
+        socialLinks: profile.socialLinks || [],
+        phone: profile.phone || "",
+        location: profile.location || "",
+        profileImage: profile.profileImage || "",
+        accountSettings: profile.accountSettings || null,
+        lastUpdated: profile.lastUpdated,
+        createdAt: profile.createdAt
+      } : null
+    };
+
+    console.log(`✅ [GET ME] User found: ${user.name}, Role: ${user.role}, Profile: ${profile ? 'Yes' : 'No'}`);
 
     res.status(200).json({
       success: true,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        username: user.username,
-        role: user.role,
-        isEmailVerified: user.isEmailVerified,
-        isProfileComplete: user.isProfileComplete,
-        createdAt: user.createdAt,
-      },
+      user: userResponse,
     });
   } catch (error) {
     console.error("❌ [GET ME] Error:", error);
@@ -552,6 +638,104 @@ export const getMe = async (req, res) => {
     });
   }
 };
+// ... other imports and functions ...
+
+// UPDATE USER PROFILE - FIXED VERSION
+export const updateUserProfile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { name, email, phone, address, username } = req.body;
+    
+    console.log("👤 [UPDATE USER PROFILE] Updating user:", {
+      userId,
+      name,
+      email,
+      phone,
+      address,
+      username,
+      hasProfileImage: !!req.file,
+    });
+
+    // Find user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Update fields if provided
+    if (name !== undefined) user.name = name;
+    if (email !== undefined) user.email = email;
+    if (phone !== undefined) user.phone = phone;
+    if (address !== undefined) user.address = address;
+    if (username !== undefined) user.username = username;
+
+    // Handle profile image upload
+    if (req.file) {
+      console.log("📤 Uploading profile image...");
+      console.log("📄 File details:", {
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+      });
+      
+      try {
+        if (req.file.mimetype.startsWith('image/')) {
+          const profileImageUrl = await uploadToCloudinary(
+            req.file,
+            "profile-images"
+          );
+          user.profileImage = profileImageUrl;
+          console.log("✅ Profile image uploaded:", profileImageUrl);
+        }
+      } catch (uploadError) {
+        console.error("❌ Profile image upload failed:", uploadError);
+      }
+    }
+
+    // Save user
+    await user.save();
+
+    console.log("✅ [UPDATE USER PROFILE] User updated successfully");
+
+    // Generate new token
+    const token = user.getJwtToken();
+
+    // Return user without password
+    const userResponse = {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      address: user.address,
+      username: user.username,
+      profileImage: user.profileImage,
+      role: user.role,
+      isEmailVerified: user.isEmailVerified,
+      isProfileComplete: user.isProfileComplete,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
+
+    res.status(200).json({
+      success: true,
+      message: "Profile updated successfully",
+      token: token,
+      user: userResponse,
+    });
+  } catch (error) {
+    console.error("❌ [UPDATE USER PROFILE] Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update profile",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+// ... rest of the controller functions ...
 
 // FORGOT PASSWORD
 export const forgotPassword = async (req, res) => {
@@ -962,6 +1146,134 @@ export const getGoogleUser = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to get user info'
+    });
+  }
+};
+
+
+
+// CHANGE PASSWORD
+export const changePassword = async (req, res) => {
+  try {
+    console.log("\n" + "=".repeat(60));
+    console.log("🔐 [CHANGE PASSWORD] Request");
+    console.log("=".repeat(60));
+    
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+    const userId = req.user.id;
+    
+    console.log(`👤 User ID: ${userId}`);
+    console.log(`🔑 Current password: ${currentPassword ? '***' + currentPassword.slice(-3) : 'Missing'}`);
+    console.log(`🔑 New password: ${newPassword ? '***' + newPassword.slice(-3) : 'Missing'}`);
+    console.log(`🔑 Confirm password: ${confirmPassword ? '***' + confirmPassword.slice(-3) : 'Missing'}`);
+
+    // Validate input
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      console.error(`❌ [CHANGE PASSWORD] Missing required fields`);
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide current password, new password, and confirmation'
+      });
+    }
+    
+    if (newPassword !== confirmPassword) {
+      console.error(`❌ [CHANGE PASSWORD] Passwords do not match`);
+      return res.status(400).json({
+        success: false,
+        message: 'New passwords do not match'
+      });
+    }
+    
+    if (newPassword.length < 6) {
+      console.error(`❌ [CHANGE PASSWORD] Password too short`);
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 6 characters'
+      });
+    }
+    
+    // Get user with password field
+    const user = await User.findById(userId).select('+password');
+    if (!user) {
+      console.error(`❌ [CHANGE PASSWORD] User not found: ${userId}`);
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    // Verify current password
+    console.log(`🔐 [CHANGE PASSWORD] Verifying current password...`);
+    const isMatch = await user.comparePassword(currentPassword);
+    if (!isMatch) {
+      console.error(`❌ [CHANGE PASSWORD] Current password is incorrect`);
+      return res.status(400).json({
+        success: false,
+        message: 'Current password is incorrect'
+      });
+    }
+    
+    // Update password
+    console.log(`🔄 [CHANGE PASSWORD] Updating password...`);
+    user.password = newPassword;
+    await user.save();
+    
+    console.log(`✅ [CHANGE PASSWORD] Password updated successfully for user: ${user.email}`);
+    
+    // Generate new token (optional - for security)
+    const token = user.getJwtToken();
+    
+    // Send email notification
+    try {
+      console.log(`📧 [CHANGE PASSWORD] Sending notification email...`);
+      await sendEmail({
+        email: user.email,
+        subject: 'Password Changed Successfully - Job Portal',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2>Password Changed Successfully</h2>
+            <p>Hello ${user.name},</p>
+            <p>Your password has been changed successfully for your Job Portal account.</p>
+            <p>If you didn't make this change, please contact support immediately.</p>
+            <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+            <p><strong>Account:</strong> ${user.email}</p>
+            <p><strong>Role:</strong> ${user.role}</p>
+            <div style="margin-top: 20px; padding: 15px; background-color: #f8f9fa; border-left: 4px solid #dc3545; border-radius: 4px;">
+              <p style="margin: 0; color: #dc3545; font-weight: bold;">
+                ⚠️ If you didn't authorize this change, please reset your password immediately and contact our support team.
+              </p>
+            </div>
+          </div>
+        `,
+        text: `Hello ${user.name},\n\nYour password has been changed successfully for your Job Portal account.\n\nIf you didn't make this change, please contact support immediately.\n\nTime: ${new Date().toLocaleString()}\nAccount: ${user.email}\nRole: ${user.role}\n\n⚠️ If you didn't authorize this change, please reset your password immediately and contact our support team.`
+      });
+      console.log(`✅ [CHANGE PASSWORD] Notification email sent to ${user.email}`);
+    } catch (emailError) {
+      console.error(`❌ [CHANGE PASSWORD] Failed to send notification email:`, emailError);
+      // Don't fail the password change if email fails
+    }
+    
+    console.log("\n" + "=".repeat(60));
+    console.log("✅ [CHANGE PASSWORD] PASSWORD CHANGE COMPLETE");
+    console.log("=".repeat(60));
+    console.log(`👤 User: ${user.name}`);
+    console.log(`📧 Email: ${user.email}`);
+    console.log(`🎭 Role: ${user.role}`);
+    console.log(`✅ Password changed successfully`);
+    console.log("=".repeat(60) + "\n");
+    
+    res.status(200).json({
+      success: true,
+      message: 'Password changed successfully',
+      token: token // Return new token for security
+    });
+    
+  } catch (error) {
+    console.error('❌ [CHANGE PASSWORD] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to change password',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };

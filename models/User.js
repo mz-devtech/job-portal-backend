@@ -99,20 +99,27 @@ const UserSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Encrypt password only for local authentication
+// FIXED: Encrypt password only for local authentication
 UserSchema.pre("save", async function(next) {
   console.log(`🔐 [User Model] Password pre-save hook called for: ${this.email}`);
   console.log(`🔐 [User Model] Auth method: ${this.authMethod}`);
   
-  // Skip password hashing for Google OAuth users
-  if (this.authMethod === "google" && !this.isModified("password")) {
+  // FIX 1: Check if password field exists and is modified
+  if (!this.isModified("password")) {
+    console.log(`🔐 [User Model] Password not modified, skipping hash`);
+    return next();
+  }
+  
+  // FIX 2: Skip password hashing for Google OAuth users
+  if (this.authMethod === "google") {
     console.log(`🔐 [User Model] Google OAuth user, skipping password hash`);
     return next();
   }
   
-  if (!this.isModified("password")) {
-    console.log(`🔐 [User Model] Password not modified, skipping hash`);
-    next();
+  // FIX 3: Check if password exists before hashing
+  if (!this.password) {
+    console.log(`🔐 [User Model] No password to hash for: ${this.email}`);
+    return next();
   }
   
   try {
@@ -143,6 +150,12 @@ UserSchema.methods.comparePassword = async function(enteredPassword) {
   if (this.authMethod !== "local") {
     throw new Error("User authenticated via Google. Please use Google sign-in.");
   }
+  
+  // Check if password exists
+  if (!this.password) {
+    throw new Error("Password not set for this user");
+  }
+  
   return await bcrypt.compare(enteredPassword, this.password);
 };
 

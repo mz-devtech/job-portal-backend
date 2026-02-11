@@ -1,19 +1,14 @@
 import express from "express";
-
 import authRoutes from "./auth.js";
-// import candidateRoutes from "./candidate.routes.js";
-// import employerRoutes from "./employer.routes.js";
-// import userRoutes from "./user.routes.js";
-// import jobRoutes from "./jobs.routes.js";
-// import applicationRoutes from "./applications.routes.js";
+import profileRoutes from "./profileRoutes.js"; // Add this line
+import candidateProfileRoutes from "./candidateProfileRoutes.js"; // Add this
+
 
 const router = express.Router();
 
 router.use("/auth", authRoutes);
-// router.use("/candidate", candidateRoutes);
-// router.use("/employer", employerRoutes);
-// router.use("/user", userRoutes);
-// router.use("/jobs", jobRoutes);
-// router.use("/applications", applicationRoutes);
+router.use("/profile", profileRoutes); // Add this line
+router.use("/candidate-profile", candidateProfileRoutes); // Add this
 
-export default router; 
+
+export default router;
