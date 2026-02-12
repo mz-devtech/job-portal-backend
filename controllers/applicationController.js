@@ -4,6 +4,8 @@ import User from "../models/User.js";
 import mongoose from "mongoose";
 import path from "path";
 import fs from "fs";
+import notificationService from '../services/notificationService.js';
+
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -190,7 +192,7 @@ export const getEmployerApplications = async (req, res) => {
       isDeleted: false,
     };
 
-    if (status && status !== "All") {
+    if (status && status !== "all" && status !== "All") {
       query.status = status;
     }
 
@@ -210,7 +212,7 @@ export const getEmployerApplications = async (req, res) => {
         path: "job",
         select: "jobTitle jobType location salaryRange postedDate",
       })
-      .populate("candidate", "name email username avatar phone location")
+      .populate("candidate", "name email username avatar phone location skills")
       .sort(sortOptions)
       .skip(skip)
       .limit(limitNum)
@@ -219,19 +221,39 @@ export const getEmployerApplications = async (req, res) => {
     const totalApplications = await Application.countDocuments(query);
     const totalPages = Math.ceil(totalApplications / limitNum);
 
-    // Group by job for summary
-    const jobsSummary = await Application.aggregate([
-      { $match: { employer: mongoose.Types.ObjectId(req.user.id), isDeleted: false } },
-      { $group: { _id: "$job", count: { $sum: 1 } } },
-      { $lookup: { from: "jobs", localField: "_id", foreignField: "_id", as: "jobDetails" } },
-      { $unwind: "$jobDetails" },
-      { $project: { jobTitle: "$jobDetails.jobTitle", count: 1 } },
+    // Get job details if jobId is provided
+    let jobDetails = null;
+    if (jobId) {
+      jobDetails = await Job.findById(jobId).select("jobTitle jobType location");
+    }
+
+    // Get status statistics - FIXED to work with any status value
+    const statusStats = await Application.aggregate([
+      { 
+        $match: { 
+          job: new mongoose.Types.ObjectId(jobId),
+          isDeleted: false 
+        } 
+      },
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 },
+        },
+      },
     ]);
+
+    // Convert to object with status as key
+    const stats = {};
+    statusStats.forEach((stat) => {
+      stats[stat._id] = stat.count;
+    });
 
     res.status(200).json({
       success: true,
       applications,
-      jobsSummary,
+      job: jobDetails,
+      stats,
       pagination: {
         currentPage: pageNum,
         totalPages,
@@ -329,17 +351,30 @@ export const getApplicationById = async (req, res) => {
 // @desc    Update application status
 // @route   PUT /api/applications/:id/status
 // @access  Private (Employer only)
+
+// @desc    Update application status
+// @route   PUT /api/applications/:id/status
+// @access  Private (Employer only)
 export const updateApplicationStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, note } = req.body;
     const employerId = req.user.id;
 
+    if (!status) {
+      return res.status(400).json({
+        success: false,
+        message: "Status is required",
+      });
+    }
+
     const application = await Application.findOne({
       _id: id,
       employer: employerId,
       isDeleted: false,
-    });
+    })
+    .populate('candidate', 'name email phone')
+    .populate('job', 'jobTitle companyName');
 
     if (!application) {
       return res.status(404).json({
@@ -348,28 +383,67 @@ export const updateApplicationStatus = async (req, res) => {
       });
     }
 
+    const oldStatus = application.status;
+    
+    // Don't update if status is the same
+    if (oldStatus === status) {
+      return res.status(200).json({
+        success: true,
+        message: "Status is already set to this value",
+        application,
+      });
+    }
+
+    // Update the status
     application.status = status;
+    
+    // Add to status history
     application.statusHistory.push({
       status,
-      note: note || `Status updated to ${status}`,
+      note: note || `Status changed from ${oldStatus} to ${status}`,
       updatedBy: employerId,
       updatedAt: new Date(),
     });
 
     await application.save();
 
+    // 🔔 SEND NOTIFICATIONS - This is the key part!
+    let notificationResults = null;
+    try {
+      notificationResults = await notificationService.sendStatusNotifications(
+        application,
+        application.candidate,
+        application.job,
+        status,
+        note
+      );
+      
+      console.log('📬 Notification results:', notificationResults);
+    } catch (notifError) {
+      console.error('⚠️ Notification sending failed:', notifError);
+      // Don't fail the status update if notifications fail
+    }
+
     // If status is 'hired', update job's hired count
-    if (status === "hired") {
+    if (status === "hired" && oldStatus !== "hired") {
       await Job.findByIdAndUpdate(application.job, {
         $inc: { hiredCount: 1 },
       });
     }
 
+    // Populate for response
+    await application.populate([
+      { path: "job", select: "jobTitle jobType" },
+      { path: "candidate", select: "name email username avatar phone location" },
+    ]);
+
     res.status(200).json({
       success: true,
       message: `Application status updated to ${status}`,
       application,
+      notifications: notificationResults // Optional: return notification status
     });
+    
   } catch (error) {
     console.error("❌ [APPLICATION] Update status error:", error);
     res.status(500).json({
@@ -550,23 +624,73 @@ export const downloadResume = async (req, res) => {
       isDeleted: false,
     });
 
-    if (!application || !application.resume || !application.resume.path) {
+    if (!application || !application.resume || !application.resume.filename) {
       return res.status(404).json({
         success: false,
         message: "Resume not found",
       });
     }
 
-    const resumePath = path.join(__dirname, "..", application.resume.path);
+    // Method 1: Try using the stored path
+    let resumePath = null;
     
-    if (!fs.existsSync(resumePath)) {
+    if (application.resume.path) {
+      // Check if the stored path exists
+      if (fs.existsSync(application.resume.path)) {
+        resumePath = application.resume.path;
+      }
+    }
+    
+    // Method 2: If stored path doesn't exist, try to find in uploads directory
+    if (!resumePath) {
+      const uploadDir = path.join(__dirname, "../uploads/resumes");
+      const possiblePath = path.join(uploadDir, application.resume.filename);
+      
+      if (fs.existsSync(possiblePath)) {
+        resumePath = possiblePath;
+      }
+    }
+    
+    // Method 3: Try relative path from project root
+    if (!resumePath) {
+      const rootDir = path.join(__dirname, "..");
+      const relativePath = path.join(rootDir, "uploads", "resumes", application.resume.filename);
+      
+      if (fs.existsSync(relativePath)) {
+        resumePath = relativePath;
+      }
+    }
+
+    if (!resumePath) {
+      console.error("❌ [APPLICATION] Resume file not found:", {
+        filename: application.resume.filename,
+        storedPath: application.resume.path,
+        cwd: process.cwd(),
+        __dirname: __dirname
+      });
+      
       return res.status(404).json({
         success: false,
         message: "Resume file not found on server",
       });
     }
 
-    res.download(resumePath, application.resume.originalName);
+    console.log("✅ [APPLICATION] Downloading resume:", {
+      filename: application.resume.originalName,
+      path: resumePath
+    });
+
+    res.download(resumePath, application.resume.originalName, (err) => {
+      if (err) {
+        console.error("❌ [APPLICATION] Download error:", err);
+        if (!res.headersSent) {
+          res.status(500).json({
+            success: false,
+            message: "Failed to download resume",
+          });
+        }
+      }
+    });
   } catch (error) {
     console.error("❌ [APPLICATION] Download resume error:", error);
     res.status(500).json({
@@ -577,6 +701,9 @@ export const downloadResume = async (req, res) => {
   }
 };
 
+
+
+
 // @desc    Get application statistics
 // @route   GET /api/applications/stats
 // @access  Private
@@ -586,7 +713,7 @@ export const getApplicationStats = async (req, res) => {
     const userRole = req.user.role;
 
     let match = {};
-    
+
     if (userRole === "candidate") {
       match = { candidate: mongoose.Types.ObjectId(userId), isDeleted: false };
     } else if (userRole === "employer") {

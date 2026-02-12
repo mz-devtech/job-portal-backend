@@ -82,6 +82,7 @@ router.post("/:id/interview", authorize("employer"), scheduleInterview);
 router.post("/:id/notes", authorize("employer"), addApplicationNote);
 router.get("/:id/resume", authorize("employer"), downloadResume);
 
+
 // Shared routes (both candidate and employer can access)
 router.get("/:id", getApplicationById);
 

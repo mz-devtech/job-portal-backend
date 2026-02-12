@@ -29,16 +29,8 @@ const applicationSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: [
-      "pending",
-      "reviewed",
-      "shortlisted",
-      "interview",
-      "hired",
-      "rejected",
-      "withdrawn",
-    ],
     default: "pending",
+    // REMOVE THE ENUM - this is the key change!
   },
   statusHistory: [
     {
@@ -111,13 +103,17 @@ applicationSchema.pre("save", function (next) {
   next();
 });
 
-// Add status to history when changed
+// Add status to history when changed - FIX THIS TO PREVENT DUPLICATES
 applicationSchema.pre("save", function (next) {
   if (this.isModified("status")) {
-    this.statusHistory.push({
-      status: this.status,
-      updatedAt: new Date(),
-    });
+    // Check if the last status in history is the same as the new status
+    const lastHistory = this.statusHistory[this.statusHistory.length - 1];
+    if (!lastHistory || lastHistory.status !== this.status) {
+      this.statusHistory.push({
+        status: this.status,
+        updatedAt: new Date(),
+      });
+    }
   }
   next();
 });
