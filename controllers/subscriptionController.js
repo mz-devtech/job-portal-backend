@@ -204,15 +204,42 @@ export const cancelSubscription = async (req, res) => {
 // @desc    Check subscription status
 // @route   GET /api/subscriptions/status
 // @access  Private
+// @desc    Check subscription status
+// @route   GET /api/subscriptions/status
+// @access  Private
 export const checkSubscriptionStatus = async (req, res) => {
   try {
     const userId = req.user.id;
 
+    // Check for active subscription that hasn't expired
     const activeSubscription = await Subscription.findOne({
       user: userId,
       status: 'active',
       endDate: { $gt: new Date() },
     }).populate('plan');
+
+    // Auto-update expired subscriptions
+    if (!activeSubscription) {
+      // Find any subscriptions that are marked active but have expired
+      const expiredSubscriptions = await Subscription.find({
+        user: userId,
+        status: 'active',
+        endDate: { $lte: new Date() },
+      });
+
+      if (expiredSubscriptions.length > 0) {
+        // Update them to expired
+        for (const sub of expiredSubscriptions) {
+          sub.status = 'expired';
+          await sub.save();
+        }
+
+        // Update user
+        await User.findByIdAndUpdate(userId, {
+          subscriptionStatus: 'expired',
+        });
+      }
+    }
 
     res.status(200).json({
       success: true,
