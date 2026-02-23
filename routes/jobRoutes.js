@@ -13,6 +13,9 @@ import {
   getJobFilters,
   expireJob,
   getJobApplications,
+  getAllJobs,
+  permanentDeleteJob, // Add this
+  softDeleteJob, // Add this
 } from '../controllers/jobController.js';
 
 const router = express.Router();
@@ -21,17 +24,22 @@ const router = express.Router();
 router.get('/', getJobs);
 router.get('/search', searchJobs);
 router.get('/filters', getJobFilters);
+router.get('/all', getAllJobs);
 router.get('/:id', getJobById);
 
 // Protected routes
 router.use(protect);
+
+// Delete routes (different levels)
+router.delete('/:id/soft', authorize('employer', 'admin'), softDeleteJob); // Soft delete
+router.delete('/:id/permanent', authorize('admin'), permanentDeleteJob); // Permanent delete (admin only)
 
 // Employer routes
 router.post('/', authorize('employer'), createJob);
 router.get('/employer/my-jobs', authorize('employer'), getEmployerJobs);
 router.get('/employer/stats', authorize('employer'), getJobStats);
 router.put('/:id', authorize('employer'), updateJob);
-router.delete('/:id', authorize('employer'), deleteJob);
+router.delete('/:id', authorize('employer'), deleteJob); // Original delete (soft delete)
 router.patch('/:id/promote', authorize('employer'), promoteJob);
 router.patch('/:id/expire', authorize('employer'), expireJob);
 router.get('/:jobId/applications', authorize('employer'), getJobApplications);

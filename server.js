@@ -9,6 +9,8 @@ import cookieParser from "cookie-parser";
 
 import session from 'express-session';
 import passport from './config/googleOAuth.js';
+import { rawBody } from './middleware/rawBody.js';
+
 
 // Load environment variables
 dotenv.config({ path: ".env" });
@@ -69,6 +71,10 @@ app.use((req, res, next) => {
   );
   console.log("📋 Content-Type:", req.headers["content-type"]);
   next();
+});
+
+app.post('/api/payments/webhook', rawBody, (req, res) => {
+  // This will be handled by your webhook controller
 });
 
 // ========== CRITICAL: DO NOT USE CUSTOM BODY PARSER ==========

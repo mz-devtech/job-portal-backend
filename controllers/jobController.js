@@ -1099,3 +1099,186 @@ export const promoteJob = async (req, res) => {
     });
   }
 };
+
+
+// Get all jobs (for admin/stats) - NEW
+export const getAllJobs = async (req, res) => {
+  try {
+    console.log('📊 [GET ALL JOBS] Fetching all jobs');
+    
+    const { page = 1, limit = 50, status, search } = req.query;
+    
+    const query = {};
+    
+    // Filter by status if provided
+    if (status && status !== 'all' && status !== 'All') {
+      query.status = status;
+    }
+    
+    // Search by job title
+    if (search) {
+      query.jobTitle = { $regex: search, $options: 'i' };
+    }
+    
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Get all jobs with employer details
+    const jobs = await Job.find(query)
+      .populate('employer', 'name email companyName avatar')
+      .sort({ postedDate: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+    
+    // Get application counts for each job
+    const jobsWithStats = await Promise.all(
+      jobs.map(async (job) => {
+        const applicationsCount = await Application.countDocuments({
+          job: job._id,
+          isDeleted: false
+        });
+        
+        // Calculate days remaining
+        const daysRemaining = Math.ceil((new Date(job.expirationDate) - new Date()) / (1000 * 60 * 60 * 24));
+        
+        return {
+          ...job,
+          applicationsCount,
+          daysRemaining: daysRemaining > 0 ? daysRemaining : 0,
+          isExpired: daysRemaining <= 0 || job.status === 'Expired'
+        };
+      })
+    );
+    
+    const totalJobs = await Job.countDocuments(query);
+    const totalPages = Math.ceil(totalJobs / parseInt(limit));
+    
+    // Get summary statistics
+    const stats = {
+      total: await Job.countDocuments({}),
+      active: await Job.countDocuments({ status: 'Active' }),
+      expired: await Job.countDocuments({ 
+        $or: [{ status: 'Expired' }, { expirationDate: { $lt: new Date() } }]
+      }),
+      draft: await Job.countDocuments({ status: 'Draft' }),
+      closed: await Job.countDocuments({ status: 'Closed' })
+    };
+    
+    console.log('✅ [GET ALL JOBS] Jobs fetched successfully:', jobsWithStats.length);
+    
+    res.status(200).json({
+      success: true,
+      jobs: jobsWithStats,
+      stats,
+      pagination: {
+        currentPage: parseInt(page),
+        totalPages,
+        totalJobs,
+        hasNextPage: parseInt(page) < totalPages,
+        hasPrevPage: parseInt(page) > 1,
+      },
+    });
+    
+  } catch (error) {
+    console.error('❌ [GET ALL JOBS] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch all jobs',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+
+
+// Delete job permanently (Admin only) - NEW
+export const permanentDeleteJob = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    console.log('🗑️ [PERMANENT DELETE JOB] Request for job:', id);
+    
+    // Check if user is admin (you can add this check)
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admins can permanently delete jobs',
+      });
+    }
+    
+    const job = await Job.findById(id);
+    
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found',
+      });
+    }
+    
+    // Delete all applications associated with this job first
+    await Application.deleteMany({ job: id });
+    
+    // Permanently delete the job
+    await Job.findByIdAndDelete(id);
+    
+    console.log('✅ [PERMANENT DELETE JOB] Job permanently deleted:', id);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Job permanently deleted successfully',
+    });
+    
+  } catch (error) {
+    console.error('❌ [PERMANENT DELETE JOB] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete job',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+// Soft delete job (for employers)
+export const softDeleteJob = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const employerId = req.user.id;
+    
+    const job = await Job.findById(id);
+    
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found',
+      });
+    }
+    
+    // Check if user is the employer or admin
+    if (job.employer.toString() !== employerId && req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to delete this job',
+      });
+    }
+    
+    // Soft delete - mark as deleted
+    job.isDeleted = true;
+    job.deletedAt = new Date();
+    job.status = 'Deleted';
+    await job.save();
+    
+    console.log('✅ [SOFT DELETE JOB] Job soft deleted successfully:', job._id);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Job deleted successfully',
+    });
+    
+  } catch (error) {
+    console.error('❌ [SOFT DELETE JOB] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete job',
+    });
+  }
+};

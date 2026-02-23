@@ -120,18 +120,7 @@ const jobSchema = new mongoose.Schema(
     jobCategory: {
       type: String,
       required: true,
-      enum: [
-        'IT & Software',
-        'Design & Creative',
-        'Sales & Marketing',
-        'Finance & Accounting',
-        'Human Resources',
-        'Customer Service',
-        'Healthcare',
-        'Education',
-        'Engineering',
-        'Other',
-      ],
+     
     },
     
     tags: [{
@@ -190,7 +179,7 @@ const jobSchema = new mongoose.Schema(
     // Status & Metadata
     status: {
       type: String,
-      enum: ['Active', 'Expired', 'Closed', 'Draft'],
+      enum: ['Active', 'Expired', 'Closed', 'Draft','Deleted'],
       default: 'Active',
     },
     

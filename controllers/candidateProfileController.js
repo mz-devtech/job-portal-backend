@@ -12,9 +12,9 @@ import mongoose from 'mongoose';
 export const getCandidateProfile = async (req, res) => {
   try {
     console.log('👤 [GET PROFILE] Request for user:', req.user.id);
-    
+
     const profile = await CandidateProfile.findOne({ user: req.user.id });
-    
+
     if (!profile) {
       console.log('ℹ️ [GET PROFILE] No profile found for user');
       return res.status(200).json({
@@ -23,7 +23,7 @@ export const getCandidateProfile = async (req, res) => {
         message: 'No profile found',
       });
     }
-    
+
     console.log('✅ [GET PROFILE] Profile found');
     res.status(200).json({
       success: true,
@@ -43,10 +43,10 @@ export const getCandidateProfile = async (req, res) => {
 export const createOrUpdateCandidateProfile = async (req, res) => {
   try {
     console.log('📝 [CREATE/UPDATE PROFILE] Request from user:', req.user.id);
-    
+
     const userId = req.user.id;
     let updateData = {};
-    
+
     // Parse JSON data from formData
     if (req.body.data) {
       try {
@@ -60,20 +60,20 @@ export const createOrUpdateCandidateProfile = async (req, res) => {
         });
       }
     }
-    
+
     console.log('📁 Files received:', req.files);
-    
+
     // Find existing profile
     let profile = await CandidateProfile.findOne({ user: userId });
     const isNewProfile = !profile;
-    
+
     if (!profile) {
       console.log('➕ [CREATE/UPDATE PROFILE] Creating new profile');
       profile = new CandidateProfile({ user: userId });
     } else {
       console.log('✏️ [CREATE/UPDATE PROFILE] Updating existing profile');
     }
-    
+
     // Handle file uploads
     if (req.files) {
       // Profile image
@@ -87,7 +87,7 @@ export const createOrUpdateCandidateProfile = async (req, res) => {
         profile.personalInfo.profileImage = profileImage;
         console.log('✅ [CREATE/UPDATE PROFILE] Profile image uploaded:', profileImage);
       }
-      
+
       // CV file
       if (req.files.cv) {
         console.log('📄 [CREATE/UPDATE PROFILE] Uploading CV...');
@@ -100,7 +100,7 @@ export const createOrUpdateCandidateProfile = async (req, res) => {
         console.log('✅ [CREATE/UPDATE PROFILE] CV uploaded:', cvFile);
       }
     }
-    
+
     // Update personal info if provided
     if (updateData.personalInfo) {
       if (!profile.personalInfo) profile.personalInfo = {};
@@ -109,7 +109,7 @@ export const createOrUpdateCandidateProfile = async (req, res) => {
         ...updateData.personalInfo,
       };
     }
-    
+
     // Update profile details if provided
     if (updateData.profileDetails) {
       if (!profile.profileDetails) profile.profileDetails = {};
@@ -118,17 +118,17 @@ export const createOrUpdateCandidateProfile = async (req, res) => {
         ...updateData.profileDetails,
       };
     }
-    
+
     // Update social links if provided - FIXED
     if (updateData.socialLinks !== undefined) {
       // If it's an array, replace with filtered array
       if (Array.isArray(updateData.socialLinks)) {
         const validLinks = updateData.socialLinks.filter(
-          link => link && 
-                 link.platform && 
-                 link.url &&
-                 link.platform.toString().trim() !== '' && 
-                 link.url.toString().trim() !== ''
+          link => link &&
+            link.platform &&
+            link.url &&
+            link.platform.toString().trim() !== '' &&
+            link.url.toString().trim() !== ''
         );
         profile.socialLinks = validLinks;
         console.log(`✅ Updated social links: ${validLinks.length} valid link(s)`);
@@ -139,7 +139,7 @@ export const createOrUpdateCandidateProfile = async (req, res) => {
       }
       // If undefined, don't change existing links
     }
-    
+
     // Update account settings if provided
     if (updateData.accountSettings) {
       if (!profile.accountSettings) {
@@ -159,12 +159,12 @@ export const createOrUpdateCandidateProfile = async (req, res) => {
           },
         };
       }
-      
+
       // Merge account settings deeply
       Object.keys(updateData.accountSettings).forEach(key => {
-        if (typeof updateData.accountSettings[key] === 'object' && 
-            updateData.accountSettings[key] !== null &&
-            !Array.isArray(updateData.accountSettings[key])) {
+        if (typeof updateData.accountSettings[key] === 'object' &&
+          updateData.accountSettings[key] !== null &&
+          !Array.isArray(updateData.accountSettings[key])) {
           profile.accountSettings[key] = {
             ...profile.accountSettings[key],
             ...updateData.accountSettings[key],
@@ -174,13 +174,13 @@ export const createOrUpdateCandidateProfile = async (req, res) => {
         }
       });
     }
-    
+
     // Update timestamps
     profile.lastUpdated = new Date();
-    
+
     // Save profile to trigger completion calculation
     await profile.save();
-    
+
     // Update user's profile completion status
     const user = await User.findById(userId);
     if (user) {
@@ -190,7 +190,7 @@ export const createOrUpdateCandidateProfile = async (req, res) => {
         console.log('✅ [CREATE/UPDATE PROFILE] User profile status updated to:', user.isProfileComplete);
       }
     }
-    
+
     console.log('✅ [CREATE/UPDATE PROFILE] Profile saved successfully');
     console.log('📊 Completion percentage:', profile.completionPercentage + '%');
     console.log('✅ Profile complete:', profile.isProfileComplete);
@@ -199,13 +199,13 @@ export const createOrUpdateCandidateProfile = async (req, res) => {
     console.log('- profileDetails:', profile.profileDetails ? 'Present' : 'Missing');
     console.log('- socialLinks:', profile.socialLinks?.length || 0, 'links');
     console.log('- accountSettings.contact:', profile.accountSettings?.contact ? 'Present' : 'Missing');
-    
+
     res.status(200).json({
       success: true,
       message: isNewProfile ? 'Profile created successfully' : 'Profile updated successfully',
       profile,
     });
-    
+
   } catch (error) {
     console.error('❌ [CREATE/UPDATE PROFILE] Error:', error);
     res.status(500).json({
@@ -220,19 +220,19 @@ export const createOrUpdateCandidateProfile = async (req, res) => {
 export const deleteCandidateProfile = async (req, res) => {
   try {
     console.log('🗑️ [DELETE PROFILE] Request from user:', req.user.id);
-    
+
     const profile = await CandidateProfile.findOneAndDelete({ user: req.user.id });
-    
+
     if (!profile) {
       return res.status(404).json({
         success: false,
         message: 'Profile not found',
       });
     }
-    
+
     // Update user's profile completion status
     await User.findByIdAndUpdate(req.user.id, { isProfileComplete: false });
-    
+
     console.log('✅ [DELETE PROFILE] Profile deleted successfully');
     res.status(200).json({
       success: true,
@@ -251,18 +251,18 @@ export const deleteCandidateProfile = async (req, res) => {
 export const getPublicProfile = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const profile = await CandidateProfile.findOne({ user: id })
       .populate('user', 'name email username')
       .select('-accountSettings -socialLinks');
-    
+
     if (!profile) {
       return res.status(404).json({
         success: false,
         message: 'Profile not found',
       });
     }
-    
+
     // Only show public data
     const publicProfile = {
       personalInfo: {
@@ -279,7 +279,7 @@ export const getPublicProfile = async (req, res) => {
       isProfileComplete: profile.isProfileComplete,
       completionPercentage: profile.completionPercentage,
     };
-    
+
     res.status(200).json({
       success: true,
       profile: publicProfile,
@@ -306,7 +306,11 @@ export const getPublicProfile = async (req, res) => {
 // PUBLIC CANDIDATE LISTING & DETAILS
 // ============================================
 
-// Get all candidates with filters
+// controllers/candidateProfileController.js - Update the getAllCandidates function
+
+
+
+
 export const getAllCandidates = async (req, res) => {
   try {
     const {
@@ -319,16 +323,36 @@ export const getAllCandidates = async (req, res) => {
       education = '',
       minCompletion = 0,
       sortBy = 'completionPercentage',
-      sortOrder = 'desc'
+      sortOrder = 'desc',
+      role = 'candidate' // Add role filter parameter
     } = req.query;
 
     console.log('🔍 [GET CANDIDATES] Fetching with filters:', {
-      page, limit, search, location, gender, experience, education, minCompletion
+      page, limit, search, location, gender, experience, education, minCompletion, role
     });
 
-    // Build query
-    const query = { 
-      user: { $exists: true }
+    // First, get all user IDs with role = 'candidate'
+    const candidateUsers = await User.find({ role: 'candidate' }).distinct('_id');
+
+    if (candidateUsers.length === 0) {
+      return res.status(200).json({
+        success: true,
+        candidates: [],
+        pagination: {
+          currentPage: 1,
+          totalPages: 0,
+          totalCandidates: 0,
+          hasNextPage: false,
+          hasPrevPage: false,
+          limit: parseInt(limit)
+        },
+        filters: await getCandidateFilterOptions()
+      });
+    }
+
+    // Build query to only include candidate users
+    const query = {
+      user: { $in: candidateUsers } // Only users with role = candidate
     };
 
     // Only show public profiles
@@ -345,9 +369,9 @@ export const getAllCandidates = async (req, res) => {
 
     // Filter by location
     if (location && location.trim() !== '') {
-      query['accountSettings.contact.location'] = { 
-        $regex: location.trim(), 
-        $options: 'i' 
+      query['accountSettings.contact.location'] = {
+        $regex: location.trim(),
+        $options: 'i'
       };
     }
 
@@ -382,19 +406,28 @@ export const getAllCandidates = async (req, res) => {
 
     // Execute query with population
     const candidates = await CandidateProfile.find(query)
-      .populate('user', 'name email username avatar createdAt')
+      .populate('user', 'name email username avatar createdAt role') // Include role in population
       .sort(sortOptions)
       .skip(skip)
       .limit(limitNum)
       .lean();
 
-    // Get total count
-    const totalCandidates = await CandidateProfile.countDocuments(query);
+    // Filter out any profiles where user role is not candidate (double-check)
+    const filteredCandidates = candidates.filter(c =>
+      c.user && c.user.role === 'candidate'
+    );
+
+    // Get total count of candidate profiles only
+    const totalCandidates = await CandidateProfile.countDocuments({
+      ...query,
+      user: { $in: candidateUsers }
+    });
+
     const totalPages = Math.ceil(totalCandidates / limitNum);
 
     // Get additional stats for each candidate
     const candidatesWithStats = await Promise.all(
-      candidates.map(async (candidate) => {
+      filteredCandidates.map(async (candidate) => {
         // Get application count
         const applicationsCount = await Application.countDocuments({
           candidate: candidate.user._id,
@@ -433,7 +466,7 @@ export const getAllCandidates = async (req, res) => {
     // Get filter options for UI
     const filterOptions = await getCandidateFilterOptions();
 
-    console.log(`✅ [GET CANDIDATES] Found ${totalCandidates} candidates`);
+    console.log(`✅ [GET CANDIDATES] Found ${filteredCandidates.length} candidates out of ${candidates.length} total profiles`);
 
     res.status(200).json({
       success: true,
@@ -459,18 +492,72 @@ export const getAllCandidates = async (req, res) => {
   }
 };
 
+// Also update the getCandidateFilterOptions to only consider candidates
+async function getCandidateFilterOptions() {
+  try {
+    // Get only candidate user IDs
+    const candidateUsers = await User.find({ role: 'candidate' }).distinct('_id');
+
+    // Get unique experience levels from candidate profiles only
+    const experienceLevels = await CandidateProfile.distinct('personalInfo.experience', {
+      'personalInfo.experience': { $ne: null, $ne: '' },
+      user: { $in: candidateUsers }
+    });
+
+    // Get unique education levels from candidate profiles only
+    const educationLevels = await CandidateProfile.distinct('personalInfo.education', {
+      'personalInfo.education': { $ne: null, $ne: '' },
+      user: { $in: candidateUsers }
+    });
+
+    // Get unique locations from candidate profiles only
+    const locations = await CandidateProfile.distinct('accountSettings.contact.location', {
+      'accountSettings.contact.location': { $ne: null, $ne: '' },
+      user: { $in: candidateUsers }
+    });
+
+    // Get gender options from candidate profiles only
+    const genders = await CandidateProfile.distinct('profileDetails.gender', {
+      'profileDetails.gender': { $ne: null, $ne: '' },
+      user: { $in: candidateUsers }
+    });
+
+    return {
+      experienceLevels: experienceLevels.filter(level => level && level !== ''),
+      educationLevels: educationLevels.filter(edu => edu && edu !== ''),
+      locations: locations.filter(loc => loc && loc !== ''),
+      genders: genders.filter(gender => gender && gender !== ''),
+      completionRanges: [
+        { label: 'All Profiles', value: 0 },
+        { label: '50%+ Complete', value: 50 },
+        { label: '80%+ Complete', value: 80 },
+        { label: '100% Complete', value: 100 }
+      ]
+    };
+  } catch (error) {
+    console.error('Error fetching filter options:', error);
+    return {
+      experienceLevels: [],
+      educationLevels: [],
+      locations: [],
+      genders: [],
+      completionRanges: []
+    };
+  }
+}
+
 // Get single candidate by ID with full details
 export const getCandidateById = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     console.log('🔍 [GET CANDIDATE] Fetching candidate:', id);
 
     let query = {};
-    
+
     // Check if ID is user ID or profile ID
     if (mongoose.Types.ObjectId.isValid(id)) {
-      query = { 
+      query = {
         $or: [
           { _id: id },
           { user: id }
@@ -501,17 +588,17 @@ export const getCandidateById = async (req, res) => {
     // Get applications history (only if candidate owns it or employer is viewing)
     let applications = [];
     if (req.user && (
-      req.user.id === candidate.user._id.toString() || 
+      req.user.id === candidate.user._id.toString() ||
       req.user.role === 'employer'
     )) {
-      applications = await Application.find({ 
+      applications = await Application.find({
         candidate: candidate.user._id,
-        isDeleted: false 
+        isDeleted: false
       })
-      .populate('job', 'jobTitle jobType location employer')
-      .sort({ appliedAt: -1 })
-      .limit(5)
-      .lean();
+        .populate('job', 'jobTitle jobType location employer')
+        .sort({ appliedAt: -1 })
+        .limit(5)
+        .lean();
     }
 
     // Get saved jobs count (for candidate's own profile)
@@ -600,10 +687,12 @@ export const getCandidateStats = async (req, res) => {
     // Get application statistics
     const applicationStats = await Application.aggregate([
       { $match: { candidate: mongoose.Types.ObjectId(userId), isDeleted: false } },
-      { $group: { 
-        _id: '$status', 
-        count: { $sum: 1 } 
-      }}
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
     ]);
 
     // Get saved jobs count
@@ -669,52 +758,7 @@ export const getCandidateFilters = async (req, res) => {
   }
 };
 
-// Helper function to get filter options
-async function getCandidateFilterOptions() {
-  try {
-    // Get unique experience levels
-    const experienceLevels = await CandidateProfile.distinct('personalInfo.experience', {
-      'personalInfo.experience': { $ne: null, $ne: '' }
-    });
 
-    // Get unique education levels
-    const educationLevels = await CandidateProfile.distinct('personalInfo.education', {
-      'personalInfo.education': { $ne: null, $ne: '' }
-    });
-
-    // Get unique locations
-    const locations = await CandidateProfile.distinct('accountSettings.contact.location', {
-      'accountSettings.contact.location': { $ne: null, $ne: '' }
-    });
-
-    // Get gender options
-    const genders = await CandidateProfile.distinct('profileDetails.gender', {
-      'profileDetails.gender': { $ne: null, $ne: '' }
-    });
-
-    return {
-      experienceLevels: experienceLevels.filter(level => level && level !== ''),
-      educationLevels: educationLevels.filter(edu => edu && edu !== ''),
-      locations: locations.filter(loc => loc && loc !== ''),
-      genders: genders.filter(gender => gender && gender !== ''),
-      completionRanges: [
-        { label: 'All Profiles', value: 0 },
-        { label: '50%+ Complete', value: 50 },
-        { label: '80%+ Complete', value: 80 },
-        { label: '100% Complete', value: 100 }
-      ]
-    };
-  } catch (error) {
-    console.error('Error fetching filter options:', error);
-    return {
-      experienceLevels: [],
-      educationLevels: [],
-      locations: [],
-      genders: [],
-      completionRanges: []
-    };
-  }
-}
 
 // ============================================
 // SAVED CANDIDATES (For Employers)
@@ -836,8 +880,8 @@ export const getSavedCandidates = async (req, res) => {
     // Get candidate profiles for each saved candidate
     const candidatesWithProfiles = await Promise.all(
       savedCandidates.map(async (saved) => {
-        const profile = await CandidateProfile.findOne({ 
-          user: saved.candidate._id 
+        const profile = await CandidateProfile.findOne({
+          user: saved.candidate._id
         }).lean();
 
         return {
@@ -913,18 +957,18 @@ export const checkSavedCandidate = async (req, res) => {
 export const getSavedCandidatesCount = async (req, res) => {
   try {
     const employerId = req.user.id;
-    
+
     const count = await SavedCandidate.countDocuments({
       employer: employerId
     });
-    
+
     console.log(`✅ [GET SAVED CANDIDATES COUNT] Employer ${employerId} has ${count} saved candidates`);
-    
+
     res.status(200).json({
       success: true,
       count
     });
-    
+
   } catch (error) {
     console.error('❌ [GET SAVED CANDIDATES COUNT] Error:', error);
     res.status(500).json({

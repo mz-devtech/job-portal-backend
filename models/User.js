@@ -87,6 +87,21 @@ const UserSchema = new mongoose.Schema({
     type: String,
     default: ""
   },
+   stripeCustomerId: {
+    type: String,
+  },
+  subscription: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Subscription',
+  },
+  subscriptionStatus: {
+    type: String,
+    enum: ['active', 'inactive', 'past_due', 'cancelled'],
+    default: 'inactive',
+  },
+  subscriptionEndDate: {
+    type: Date,
+  },
   emailVerificationToken: String,
   emailVerificationExpire: Date,
   resetPasswordToken: String,
