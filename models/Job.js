@@ -49,7 +49,7 @@ const jobSchema = new mongoose.Schema(
       currency: {
         type: String,
         default: 'USD',
-        enum: ['USD', 'EUR', 'GBP', 'BDT', 'INR', 'CAD', 'AUD'],
+        enum: ['USD', 'EUR', 'GBP', 'BDT', 'INR', 'CAD', 'AUD','PKR'],
       },
       isNegotiable: {
         type: Boolean,
