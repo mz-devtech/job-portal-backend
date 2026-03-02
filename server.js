@@ -177,6 +177,19 @@ app.use("*", (req, res) => {
       user: "/api/user",
       jobs: "/api/jobs",
       applications: "/api/applications",
+      savedJobs: "/api/saved-jobs",
+      searchHistory: "/api/search-history",
+      statuses: "/api/statuses",
+      employers: "/api/employers",
+      categories: "/api/categories",
+      plans: "/api/plans",
+      payments: "/api/payments",
+      subscriptions: "/api/subscriptions",
+      admin: "/api/admin",
+      home: "/api/home",
+      profile: "/api/profile",
+      candidateProfile: "/api/candidate-profile",
+      employerProfile: "/api/employer-profile"
     },
   });
 });
