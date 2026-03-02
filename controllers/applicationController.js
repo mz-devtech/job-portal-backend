@@ -5,6 +5,8 @@ import mongoose from "mongoose";
 import path from "path";
 import fs from "fs";
 import notificationService from '../services/notificationService.js';
+import { uploadToCloudinary } from "../utils/cloudinary.js";
+
 
 import { fileURLToPath } from "url";
 
@@ -42,16 +44,28 @@ export const applyForJob = async (req, res) => {
       });
     }
 
-    // Handle resume upload
+    // Handle resume upload to Cloudinary
     let resumeData = null;
     if (req.file) {
-      resumeData = {
-        filename: req.file.filename,
-        originalName: req.file.originalname,
-        path: req.file.path,
-        size: req.file.size,
-        mimetype: req.file.mimetype,
-      };
+      try {
+        console.log('📤 Uploading resume to Cloudinary...');
+        const resumeUrl = await uploadToCloudinary(req.file, 'resumes');
+        
+        resumeData = {
+          filename: req.file.originalname, // Store original name
+          url: resumeUrl, // Cloudinary URL
+          size: req.file.size,
+          mimetype: req.file.mimetype,
+        };
+        
+        console.log('✅ Resume uploaded to Cloudinary:', resumeUrl);
+      } catch (uploadError) {
+        console.error('❌ Failed to upload resume:', uploadError);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to upload resume. Please try again.",
+        });
+      }
     }
 
     // Create application
@@ -97,6 +111,124 @@ export const applyForJob = async (req, res) => {
     });
   }
 };
+
+// @desc    Download resume
+// @route   GET /api/applications/:id/resume
+// @access  Private (Employer only)
+export const downloadResume = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const employerId = req.user.id;
+
+    const application = await Application.findOne({
+      _id: id,
+      employer: employerId,
+      isDeleted: false,
+    });
+
+    if (!application || !application.resume) {
+      return res.status(404).json({
+        success: false,
+        message: "Resume not found",
+      });
+    }
+
+    // If it's a Cloudinary URL, redirect to it
+    if (application.resume.url) {
+      console.log('✅ Redirecting to Cloudinary resume:', application.resume.url);
+      return res.redirect(application.resume.url);
+    }
+
+    // Legacy support for local files (development only)
+    if (process.env.NODE_ENV === 'development' && application.resume.path) {
+      const fs = await import('fs');
+      const path = await import('path');
+      
+      if (fs.existsSync(application.resume.path)) {
+        return res.download(application.resume.path, application.resume.originalName || 'resume.pdf');
+      }
+    }
+
+    return res.status(404).json({
+      success: false,
+      message: "Resume file not found",
+    });
+
+  } catch (error) {
+    console.error("❌ [APPLICATION] Download resume error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to download resume",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+// @desc    Withdraw application (with Cloudinary cleanup)
+// @route   PUT /api/applications/:id/withdraw
+// @access  Private (Candidate only)
+export const withdrawApplication = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    const candidateId = req.user.id;
+
+    const application = await Application.findOne({
+      _id: id,
+      candidate: candidateId,
+      isDeleted: false,
+    });
+
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: "Application not found",
+      });
+    }
+
+    if (application.status === "hired" || application.status === "rejected") {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot withdraw application with status: ${application.status}`,
+      });
+    }
+
+    // Optionally delete resume from Cloudinary (if you want to clean up)
+    if (application.resume?.url && process.env.NODE_ENV === 'production') {
+      try {
+        await deleteFromCloudinary(application.resume.url);
+        console.log('✅ Deleted resume from Cloudinary');
+      } catch (deleteError) {
+        console.warn('⚠️ Failed to delete resume from Cloudinary:', deleteError);
+        // Don't fail the withdrawal if cleanup fails
+      }
+    }
+
+    application.isDeleted = true;
+    application.deletedAt = new Date();
+    application.withdrawalReason = reason || "Withdrawn by candidate";
+
+    await application.save();
+
+    // Decrement applications count on job
+    await Job.findByIdAndUpdate(application.job, {
+      $inc: { applicationsCount: -1 },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Application withdrawn successfully",
+    });
+  } catch (error) {
+    console.error("❌ [APPLICATION] Withdraw error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to withdraw application",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
 
 // @desc    Get candidate's applications
 // @route   GET /api/applications/candidate
@@ -454,59 +586,7 @@ export const updateApplicationStatus = async (req, res) => {
   }
 };
 
-// @desc    Withdraw application
-// @route   PUT /api/applications/:id/withdraw
-// @access  Private (Candidate only)
-export const withdrawApplication = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { reason } = req.body;
-    const candidateId = req.user.id;
 
-    const application = await Application.findOne({
-      _id: id,
-      candidate: candidateId,
-      isDeleted: false,
-    });
-
-    if (!application) {
-      return res.status(404).json({
-        success: false,
-        message: "Application not found",
-      });
-    }
-
-    if (application.status === "hired" || application.status === "rejected") {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot withdraw application with status: ${application.status}`,
-      });
-    }
-
-    application.isDeleted = true;
-    application.deletedAt = new Date();
-    application.withdrawalReason = reason || "Withdrawn by candidate";
-
-    await application.save();
-
-    // Decrement applications count on job
-    await Job.findByIdAndUpdate(application.job, {
-      $inc: { applicationsCount: -1 },
-    });
-
-    res.status(200).json({
-      success: true,
-      message: "Application withdrawn successfully",
-    });
-  } catch (error) {
-    console.error("❌ [APPLICATION] Withdraw error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to withdraw application",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
 
 // @desc    Schedule interview
 // @route   POST /api/applications/:id/interview
@@ -610,96 +690,8 @@ export const addApplicationNote = async (req, res) => {
   }
 };
 
-// @desc    Download resume
-// @route   GET /api/applications/:id/resume
-// @access  Private (Employer only)
-export const downloadResume = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const employerId = req.user.id;
 
-    const application = await Application.findOne({
-      _id: id,
-      employer: employerId,
-      isDeleted: false,
-    });
 
-    if (!application || !application.resume || !application.resume.filename) {
-      return res.status(404).json({
-        success: false,
-        message: "Resume not found",
-      });
-    }
-
-    // Method 1: Try using the stored path
-    let resumePath = null;
-    
-    if (application.resume.path) {
-      // Check if the stored path exists
-      if (fs.existsSync(application.resume.path)) {
-        resumePath = application.resume.path;
-      }
-    }
-    
-    // Method 2: If stored path doesn't exist, try to find in uploads directory
-    if (!resumePath) {
-      const uploadDir = path.join(__dirname, "../uploads/resumes");
-      const possiblePath = path.join(uploadDir, application.resume.filename);
-      
-      if (fs.existsSync(possiblePath)) {
-        resumePath = possiblePath;
-      }
-    }
-    
-    // Method 3: Try relative path from project root
-    if (!resumePath) {
-      const rootDir = path.join(__dirname, "..");
-      const relativePath = path.join(rootDir, "uploads", "resumes", application.resume.filename);
-      
-      if (fs.existsSync(relativePath)) {
-        resumePath = relativePath;
-      }
-    }
-
-    if (!resumePath) {
-      console.error("❌ [APPLICATION] Resume file not found:", {
-        filename: application.resume.filename,
-        storedPath: application.resume.path,
-        cwd: process.cwd(),
-        __dirname: __dirname
-      });
-      
-      return res.status(404).json({
-        success: false,
-        message: "Resume file not found on server",
-      });
-    }
-
-    console.log("✅ [APPLICATION] Downloading resume:", {
-      filename: application.resume.originalName,
-      path: resumePath
-    });
-
-    res.download(resumePath, application.resume.originalName, (err) => {
-      if (err) {
-        console.error("❌ [APPLICATION] Download error:", err);
-        if (!res.headersSent) {
-          res.status(500).json({
-            success: false,
-            message: "Failed to download resume",
-          });
-        }
-      }
-    });
-  } catch (error) {
-    console.error("❌ [APPLICATION] Download resume error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to download resume",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
 
 
 

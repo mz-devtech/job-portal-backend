@@ -1,8 +1,5 @@
 import express from "express";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
-import { fileURLToPath } from "url";
 import { protect, authorize } from "../middleware/auth.js";
 import {
   applyForJob,
@@ -16,33 +13,21 @@ import {
   downloadResume,
   getApplicationStats,
 } from "../controllers/applicationController.js";
+import { uploadToCloudinary } from "../utils/cloudinary.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const router = express.Router();
 
-// Ensure uploads directory exists
-const uploadDir = path.join(__dirname, "../uploads/resumes");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-// Configure multer for resume upload
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
-    cb(null, `resume-${req.user.id}-${uniqueSuffix}${ext}`);
-  },
-});
+// Configure multer for memory storage (no disk writing!)
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = [".pdf", ".doc", ".docx"];
-  const ext = path.extname(file.originalname).toLowerCase();
+  const allowedMimeTypes = [
+    'application/pdf', 
+    'application/msword', 
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ];
   
-  if (allowedTypes.includes(ext)) {
+  if (allowedMimeTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
     cb(new Error("Only PDF, DOC, and DOCX files are allowed"), false);
@@ -50,14 +35,12 @@ const fileFilter = (req, file, cb) => {
 };
 
 const upload = multer({
-  storage: storage,
+  storage: storage, // Use memory storage instead of disk storage
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB limit
   },
   fileFilter: fileFilter,
 });
-
-const router = express.Router();
 
 // All routes are protected
 router.use(protect);
@@ -71,7 +54,7 @@ router.post(
   "/",
   authorize("candidate"),
   upload.single("resume"),
-  applyForJob
+  applyForJob // Your controller will handle Cloudinary upload
 );
 router.put("/:id/withdraw", authorize("candidate"), withdrawApplication);
 
@@ -81,7 +64,6 @@ router.put("/:id/status", authorize("employer"), updateApplicationStatus);
 router.post("/:id/interview", authorize("employer"), scheduleInterview);
 router.post("/:id/notes", authorize("employer"), addApplicationNote);
 router.get("/:id/resume", authorize("employer"), downloadResume);
-
 
 // Shared routes (both candidate and employer can access)
 router.get("/:id", getApplicationById);
